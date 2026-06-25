@@ -109,18 +109,19 @@ export async function getLessonById(lessonId, user) {
     if (!user) {
       const sanitized = sanitizePremiumLesson(lesson);
       sanitized.isFavorited = false;
+      sanitized.isLiked = false;
       return { locked: true, lesson: sanitized };
     }
     const isOwner = lesson.creatorId.toString() === user.id;
     const canAccess = isOwner || user.isPremium || user.role === "admin";
     if (!canAccess) {
-      // Include isFavorited for authenticated users even when the lesson is locked
-      const fav = await db.collection("favorites").findOne({
-        userId: new ObjectId(user.id),
-        lessonId: lesson._id,
-      });
+      const [fav, like] = await Promise.all([
+        db.collection("favorites").findOne({ userId: new ObjectId(user.id), lessonId: lesson._id }),
+        db.collection("likes").findOne({ userId: new ObjectId(user.id), lessonId: lesson._id }),
+      ]);
       const sanitized = sanitizePremiumLesson(lesson);
       sanitized.isFavorited = !!fav;
+      sanitized.isLiked = !!like;
       return { locked: true, lesson: sanitized };
     }
   }
@@ -130,15 +131,16 @@ export async function getLessonById(lessonId, user) {
     .updateOne({ _id: lesson._id }, { $inc: { viewsCount: 1 } })
     .catch(() => {});
 
-  // Attach isFavorited when user is present
   if (user) {
-    const fav = await db.collection("favorites").findOne({
-      userId: new ObjectId(user.id),
-      lessonId: lesson._id,
-    });
+    const [fav, like] = await Promise.all([
+      db.collection("favorites").findOne({ userId: new ObjectId(user.id), lessonId: lesson._id }),
+      db.collection("likes").findOne({ userId: new ObjectId(user.id), lessonId: lesson._id }),
+    ]);
     lesson.isFavorited = !!fav;
+    lesson.isLiked = !!like;
   } else {
     lesson.isFavorited = false;
+    lesson.isLiked = false;
   }
 
   return { locked: false, lesson };
@@ -164,7 +166,6 @@ export async function createLesson(data, user) {
     creatorName: user.name,
     creatorEmail: user.email,
     creatorPhoto: user.image || null,
-    likes: [],
     likesCount: 0,
     favoritesCount: 0,
     commentsCount: 0,
@@ -207,10 +208,11 @@ export async function deleteLesson(lessonId) {
     throw err;
   }
 
-  // Cascade delete comments, favorites, reports
+  // Cascade delete comments, favorites, likes, reports
   await Promise.all([
     db.collection("comments").deleteMany({ lessonId: new ObjectId(lessonId) }),
     db.collection("favorites").deleteMany({ lessonId: new ObjectId(lessonId) }),
+    db.collection("likes").deleteMany({ lessonId: new ObjectId(lessonId) }),
     db.collection("lessonReports").deleteMany({ lessonId: new ObjectId(lessonId) }),
   ]);
 
@@ -245,34 +247,6 @@ export async function changeAccessLevel(lessonId, accessLevel) {
     throw err;
   }
   return result;
-}
-
-export async function toggleLike(lessonId, userId) {
-  const db = getDB();
-  const oid = new ObjectId(lessonId);
-  const uoid = new ObjectId(userId);
-
-  const lesson = await db.collection("lessons").findOne({ _id: oid });
-  if (!lesson) {
-    const err = new Error("Lesson not found.");
-    err.statusCode = 404;
-    throw err;
-  }
-
-  const alreadyLiked = lesson.likes.some((id) => id.toString() === userId);
-
-  let update;
-  if (alreadyLiked) {
-    update = { $pull: { likes: uoid }, $inc: { likesCount: -1 } };
-  } else {
-    update = { $addToSet: { likes: uoid }, $inc: { likesCount: 1 } };
-  }
-
-  const result = await db
-    .collection("lessons")
-    .findOneAndUpdate({ _id: oid }, update, { returnDocument: "after" });
-
-  return { liked: !alreadyLiked, lesson: result };
 }
 
 export async function getUserPublicLessons(userId, query) {

@@ -58,6 +58,9 @@ async function createIndexes(db) {
   // favorites
   await db.collection("favorites").createIndex({ userId: 1, lessonId: 1 }, { unique: true });
 
+  // likes
+  await db.collection("likes").createIndex({ userId: 1, lessonId: 1 }, { unique: true });
+
   // comments
   await db.collection("comments").createIndex({ lessonId: 1 });
 

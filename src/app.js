@@ -18,6 +18,7 @@ import reportRoutes from "./routes/report.routes.js";
 import paymentRoutes from "./routes/payment.routes.js";
 import analyticsRoutes from "./routes/analytics.routes.js";
 import adminRoutes from "./routes/admin.routes.js";
+import likeRoutes from "./routes/like.routes.js";
 
 const app = express();
 
@@ -107,6 +108,7 @@ app.use("/api/lessons", lessonRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/comments", commentRoutes);
 app.use("/api/favorites", favoriteRoutes);
+app.use("/api/likes", likeRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/dashboard", analyticsRoutes);

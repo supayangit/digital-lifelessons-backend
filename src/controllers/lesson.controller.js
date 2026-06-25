@@ -1,4 +1,5 @@
 import * as LessonService from "../services/lesson.service.js";
+import * as LikeService from "../services/like.service.js";
 import {
   createLessonSchema,
   updateLessonSchema,
@@ -76,7 +77,7 @@ export async function changeAccessLevel(req, res) {
 }
 
 export async function toggleLike(req, res) {
-  const result = await LessonService.toggleLike(req.params.id, req.user.id);
+  const result = await LikeService.toggleLike(req.params.id, req.user.id);
   res.json({ success: true, liked: result.liked, lesson: result.lesson });
 }
 

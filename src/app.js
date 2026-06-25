@@ -1,0 +1,123 @@
+import express from "express";
+import helmet from "helmet";
+import cors from "cors";
+import rateLimit from "express-rate-limit";
+import cookieParser from "cookie-parser";
+import mongoSanitize from "express-mongo-sanitize";
+
+import { toNodeHandler } from "better-auth/node";
+import { getAuth } from "./auth/auth.js";
+
+import { errorHandler } from "./middlewares/errorHandler.js";
+
+import lessonRoutes from "./routes/lesson.routes.js";
+import userRoutes from "./routes/user.routes.js";
+import commentRoutes from "./routes/comment.routes.js";
+import favoriteRoutes from "./routes/favorite.routes.js";
+import reportRoutes from "./routes/report.routes.js";
+import paymentRoutes from "./routes/payment.routes.js";
+import analyticsRoutes from "./routes/analytics.routes.js";
+import adminRoutes from "./routes/admin.routes.js";
+
+const app = express();
+
+// ── Security Middleware ────────────────────────────────────────────────────────
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+  })
+);
+
+app.use(
+  cors({
+    origin: process.env.CLIENT_URL || "http://localhost:3000",
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "stripe-signature"],
+  })
+);
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: "Too many requests. Please try again later." },
+});
+app.use(limiter);
+
+// Stricter rate limit for auth endpoints
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: "Too many authentication attempts. Please slow down." },
+});
+
+app.use("/api/auth", (req, res) => {
+  console.log("AUTH HANDLER HIT");
+  return toNodeHandler(getAuth())(req, res);
+});
+// ── Better Auth Handler ────────────────────────────────────────────────────────
+// IMPORTANT: Better Auth must be registered BEFORE express.json() to handle its own body parsing
+app.all("/api/auth/*splat", authLimiter, (req, res) => {
+  return toNodeHandler(getAuth())(req, res);
+});
+
+// ── Body Parsing ───────────────────────────────────────────────────────────────
+// Note: Stripe webhook route uses raw body — handled per-route in payment.routes.js
+app.use(express.json({ limit: "2mb" }));
+app.use(express.urlencoded({ extended: true, limit: "2mb" }));
+app.use(cookieParser());
+
+// ── Input Sanitization ─────────────────────────────────────────────────────────
+app.use(mongoSanitize());
+
+// ── Health Check ───────────────────────────────────────────────────────────────
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
+// ── Landing Page ───────────────────────────────────────────────────────────────
+app.get("/", (req, res) => {
+  res.json({
+    success: true,
+    message: "Server is running",
+    version: "v0",
+    status: "healthy",
+    endpoints: {
+      health: "/health",
+      auth: "/api/auth/*",
+      lessons: "/api/lessons",
+      users: "/api/users",
+      comments: "/api/comments",
+      favorites: "/api/favorites",
+      reports: "/api/reports",
+      payments: "/api/payments",
+      dashboard: "/api/dashboard",
+      admin: "/api/admin"
+    }
+  });
+});
+
+// ── API Routes ─────────────────────────────────────────────────────────────────
+app.use("/api/lessons", lessonRoutes);
+app.use("/api/users", userRoutes);
+app.use("/api/comments", commentRoutes);
+app.use("/api/favorites", favoriteRoutes);
+app.use("/api/reports", reportRoutes);
+app.use("/api/payments", paymentRoutes);
+app.use("/api/dashboard", analyticsRoutes);
+app.use("/api/admin", adminRoutes);
+
+// ── 404 Handler ────────────────────────────────────────────────────────────────
+app.use((req, res) => {
+  res.status(404).json({ success: false, message: `Route ${req.originalUrl} not found.` });
+});
+
+// ── Centralized Error Handler ──────────────────────────────────────────────────
+app.use(errorHandler);
+
+export default app;

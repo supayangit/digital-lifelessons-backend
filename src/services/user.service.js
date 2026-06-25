@@ -1,6 +1,20 @@
 import { ObjectId } from "mongodb";
 import { getDB } from "../config/db.js";
 
+function formatUserProfile(user, lessonCount, favoriteCount) {
+  const { password, ...safeUser } = user;
+  return {
+    _id: safeUser._id,
+    name: safeUser.name,
+    email: safeUser.email,
+    bio: safeUser.bio || null,
+    image: safeUser.image || null,
+    role: safeUser.role,
+    lessonsCount: lessonCount,
+    favoritesCount: favoriteCount,
+  };
+}
+
 export async function getUserProfile(userId) {
   const db = getDB();
   const oid = new ObjectId(userId);
@@ -17,10 +31,32 @@ export async function getUserProfile(userId) {
     throw err;
   }
 
-  const { ...safeUser } = user;
-  delete safeUser.password;
+  return formatUserProfile(user, lessonCount, favoriteCount);
+}
 
-  return { user: safeUser, lessonCount, favoriteCount };
+export async function getUserById(userId) {
+  if (!ObjectId.isValid(userId)) {
+    const err = new Error("Invalid user ID.");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const db = getDB();
+  const oid = new ObjectId(userId);
+
+  const [user, lessonCount, favoriteCount] = await Promise.all([
+    db.collection("user").findOne({ _id: oid }),
+    db.collection("lessons").countDocuments({ creatorId: oid }),
+    db.collection("favorites").countDocuments({ userId: oid }),
+  ]);
+
+  if (!user) {
+    const err = new Error("User not found.");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  return formatUserProfile(user, lessonCount, favoriteCount);
 }
 
 export async function updateUserProfile(userId, data) {

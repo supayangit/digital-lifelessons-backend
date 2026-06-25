@@ -1,8 +1,19 @@
+import * as LessonService from "../services/lesson.service.js";
 import * as UserService from "../services/user.service.js";
 import { updateProfileSchema } from "../validations/user.validation.js";
 
 export async function getProfile(req, res) {
   const result = await UserService.getUserProfile(req.user.id);
+  res.json({ success: true, ...result });
+}
+
+export async function getUserById(req, res) {
+  const result = await UserService.getUserById(req.params.userId);
+  res.json({ success: true, ...result });
+}
+
+export async function getMyPublicLessons(req, res) {
+  const result = await LessonService.getUserPublicLessons(req.user.id, req.query);
   res.json({ success: true, ...result });
 }
 

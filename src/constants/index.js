@@ -1,6 +1,9 @@
 export const ROLES = Object.freeze({
   USER: "user",
+  CONTRIBUTOR: "contributor",
+  CURATOR: "curator",
   ADMIN: "admin",
+  CEO: "ceo",
 });
 
 export const ACCESS_LEVELS = Object.freeze({

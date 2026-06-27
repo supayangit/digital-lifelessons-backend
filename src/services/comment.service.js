@@ -1,6 +1,7 @@
 import { ObjectId } from "mongodb";
 import { getDB } from "../config/db.js";
 import { parsePagination, buildPaginationMeta } from "../utils/pagination.js";
+import { isAdminOrCeo } from "../utils/roles.js";
 
 export async function createComment(data, user) {
   const db = getDB();
@@ -41,6 +42,42 @@ export async function createComment(data, user) {
   return { ...doc, _id: result.insertedId };
 }
 
+async function enrichCommentsWithUser(db, comments) {
+  if (!Array.isArray(comments) || comments.length === 0) {
+    return comments;
+  }
+
+  const userIds = [...new Set(
+    comments
+      .map((comment) => comment.userId)
+      .filter(Boolean)
+      .map((id) => id.toString())
+  )];
+
+  if (userIds.length === 0) {
+    return comments;
+  }
+
+  const users = await db
+    .collection("user")
+    .find(
+      { _id: { $in: userIds.map((id) => new ObjectId(id)) } },
+      { projection: { name: 1, email: 1, image: 1 } }
+    )
+    .toArray();
+
+  const userMap = new Map(users.map((user) => [user._id.toString(), user]));
+
+  return comments.map((comment) => {
+    const author = userMap.get(comment.userId?.toString());
+    return {
+      ...comment,
+      userName: author?.name || comment.userName || null,
+      userPhoto: author?.image || comment.userPhoto || null,
+    };
+  });
+}
+
 export async function getCommentsByLesson(lessonId, query) {
   const db = getDB();
 
@@ -58,7 +95,8 @@ export async function getCommentsByLesson(lessonId, query) {
     db.collection("comments").countDocuments(filter),
   ]);
 
-  return { comments, pagination: buildPaginationMeta({ page, limit, total }) };
+  const enrichedComments = await enrichCommentsWithUser(db, comments);
+  return { comments: enrichedComments, pagination: buildPaginationMeta({ page, limit, total }) };
 }
 
 export async function deleteComment(commentId, user) {
@@ -79,7 +117,7 @@ export async function deleteComment(commentId, user) {
   }
 
   const isOwner = comment.userId.toString() === user.id;
-  const isAdmin = user.role === "admin";
+  const isAdmin = isAdminOrCeo(user.role);
 
   if (!isOwner && !isAdmin) {
     const err = new Error("Forbidden. You cannot delete this comment.");

@@ -15,7 +15,7 @@ export async function updateUserRole(req, res) {
   if (!role) {
     return res.status(400).json({ success: false, message: "role is required." });
   }
-  const user = await AdminService.updateUserRole(req.params.id, role);
+  const user = await AdminService.updateUserRole(req.params.id, role, req.user.role);
   res.json({ success: true, user });
 }
 

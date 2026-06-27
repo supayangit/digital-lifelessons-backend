@@ -39,7 +39,7 @@ export async function listUsers(query) {
   return { users: usersWithCounts, pagination: buildPaginationMeta({ page, limit, total }) };
 }
 
-export async function updateUserRole(userId, role) {
+export async function updateUserRole(userId, role, requesterRole) {
   const db = getDB();
 
   if (!ObjectId.isValid(userId)) {
@@ -48,10 +48,54 @@ export async function updateUserRole(userId, role) {
     throw err;
   }
 
-  const validRoles = ["user", "admin"];
+  const validRoles = ["user", "contributor", "curator", "admin", "ceo"];
   if (!validRoles.includes(role)) {
-    const err = new Error("Invalid role. Must be 'user' or 'admin'.");
+    const err = new Error("Invalid role. Must be 'user', 'contributor', 'curator', 'admin', or 'ceo'.");
     err.statusCode = 400;
+    throw err;
+  }
+
+  // Fetch target user to check their current role
+  const targetUser = await db.collection("user").findOne({ _id: new ObjectId(userId) });
+  if (!targetUser) {
+    const err = new Error("User not found.");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  // Role hierarchy: ceo > admin > curator > contributor > user
+  const roleHierarchy = { ceo: 5, admin: 4, curator: 3, contributor: 2, user: 1 };
+  const requesterHierarchy = roleHierarchy[requesterRole] || 0;
+  const targetHierarchy = roleHierarchy[targetUser.role] || 0;
+  const newRoleHierarchy = roleHierarchy[role] || 0;
+
+  // CEO can set any role except another CEO
+  if (requesterRole === "ceo") {
+    if (role === "ceo") {
+      const err = new Error("CEO cannot assign CEO role to another user.");
+      err.statusCode = 403;
+      throw err;
+    }
+  }
+  // Admin can only change users with lower hierarchy (curator, contributor, user)
+  else if (requesterRole === "admin") {
+    // Cannot change CEO or other admin
+    if (targetHierarchy >= roleHierarchy["admin"]) {
+      const err = new Error("Admin cannot change the role of a CEO or another Admin.");
+      err.statusCode = 403;
+      throw err;
+    }
+    // Cannot assign admin or CEO roles
+    if (newRoleHierarchy >= roleHierarchy["admin"]) {
+      const err = new Error("Admin can only assign curator, contributor, or user roles.");
+      err.statusCode = 403;
+      throw err;
+    }
+  }
+  // Other roles cannot change roles
+  else {
+    const err = new Error("You do not have permission to change user roles.");
+    err.statusCode = 403;
     throw err;
   }
 
@@ -60,12 +104,6 @@ export async function updateUserRole(userId, role) {
     { $set: { role, updatedAt: new Date() } },
     { returnDocument: "after", projection: { password: 0 } }
   );
-
-  if (!result) {
-    const err = new Error("User not found.");
-    err.statusCode = 404;
-    throw err;
-  }
 
   return result;
 }
@@ -108,7 +146,22 @@ export async function deleteUser(userId) {
     throw err;
   }
 
-  const result = await db.collection("user").deleteOne({ _id: new ObjectId(userId) });
+  const oid = new ObjectId(userId);
+  const user = await db.collection("user").findOne({ _id: oid }, { projection: { email: 1 } });
+
+  if (!user) {
+    const err = new Error("User not found.");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  await db.collection("deleted_user").insertOne({
+    userId: oid,
+    email: user.email,
+    deletedAt: new Date(),
+  });
+
+  const result = await db.collection("user").deleteOne({ _id: oid });
 
   if (result.deletedCount === 0) {
     const err = new Error("User not found.");
@@ -171,17 +224,18 @@ export async function markReviewed(lessonId) {
     throw err;
   }
 
-  const result = await db.collection("lessons").findOneAndUpdate(
-    { _id: new ObjectId(lessonId) },
-    { $set: { reviewed: true, updatedAt: new Date() } },
-    { returnDocument: "after" }
-  );
-
-  if (!result) {
+  const lesson = await db.collection("lessons").findOne({ _id: new ObjectId(lessonId) });
+  if (!lesson) {
     const err = new Error("Lesson not found.");
     err.statusCode = 404;
     throw err;
   }
+
+  const result = await db.collection("lessons").findOneAndUpdate(
+    { _id: new ObjectId(lessonId) },
+    { $set: { reviewed: !lesson.reviewed, updatedAt: new Date() } },
+    { returnDocument: "after" }
+  );
 
   return result;
 }
@@ -228,9 +282,13 @@ export async function ignoreReports(lessonId) {
     throw err;
   }
 
-  const result = await db
-    .collection("lessonReports")
-    .deleteMany({ lessonId: new ObjectId(lessonId) });
+  const oid = new ObjectId(lessonId);
+  const result = await db.collection("lessonReports").deleteMany({ lessonId: oid });
+
+  await db.collection("lessons").updateOne(
+    { _id: oid },
+    { $set: { isFlagged: false } }
+  );
 
   return { removed: result.deletedCount };
 }

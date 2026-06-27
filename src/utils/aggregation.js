@@ -44,12 +44,21 @@ export async function getTopContributors({ limit = 10 } = {}) {
       { $sort: { lessonCount: -1 } },
       { $limit: limit },
       {
+        $lookup: {
+          from: "user",
+          localField: "_id",
+          foreignField: "_id",
+          as: "userInfo",
+        },
+      },
+      { $unwind: { path: "$userInfo", preserveNullAndEmptyArrays: true } },
+      {
         $project: {
           _id: 0,
           creatorId: "$_id",
-          creatorName: 1,
-          creatorEmail: 1,
-          creatorPhoto: 1,
+          creatorName: { $ifNull: ["$userInfo.name", "$creatorName"] },
+          creatorEmail: { $ifNull: ["$userInfo.email", "$creatorEmail"] },
+          creatorPhoto: { $ifNull: ["$userInfo.image", "$creatorPhoto"] },
           lessonCount: 1,
         },
       },
@@ -248,16 +257,17 @@ export async function getUserDashboardAnalytics(userId, userObjectId) {
 export async function getAdminAnalytics() {
   const db = getDB();
 
-  const [totalUsers, totalLessons, totalPublicLessons, totalReports] = await Promise.all([
+  const [totalUsers, totalLessons, totalPublicLessons, totalReports, premiumUsers] = await Promise.all([
     db.collection("user").countDocuments({}),
     db.collection("lessons").countDocuments({}),
     db.collection("lessons").countDocuments({ visibility: "public" }),
     db.collection("lessonReports").countDocuments({}),
+    db.collection("user").countDocuments({ isPremium: true }),
   ]);
 
   const topContributors = await getTopContributors({ limit: 5 });
 
-  // Monthly user growth (last 6 months)
+  // Monthly user and lesson growth (last 6 months)
   const sixMonthsAgo = new Date();
   sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
 
@@ -289,14 +299,45 @@ export async function getAdminAnalytics() {
     ])
     .toArray();
 
+  // Merge growth data
+  const growthData = userGrowth.map((ugrow) => {
+    const lgrow = lessonGrowth.find((l) => l._id === ugrow._id) || { count: 0 };
+    return {
+      month: ugrow._id,
+      users: ugrow.count,
+      lessons: lgrow.count,
+    };
+  });
+
+  // Category breakdown
+  const categoryBreakdown = await db
+    .collection("lessons")
+    .aggregate([
+      {
+        $group: {
+          _id: "$category",
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { count: -1 } },
+    ])
+    .toArray()
+    .then((results) =>
+      results.map((r) => ({
+        category: r._id || "Uncategorized",
+        count: r.count,
+      }))
+    );
+
   return {
     totalUsers,
     totalLessons,
     totalPublicLessons,
     totalReports,
+    premiumUsers,
     topContributors,
-    userGrowth,
-    lessonGrowth,
+    growthData,
+    categoryBreakdown,
   };
 }
 
@@ -313,12 +354,14 @@ export async function getReportedLessonsAggregation({ skip = 0, limit = 20 } = {
         $group: {
           _id: "$lessonId",
           reportCount: { $sum: 1 },
-          reasons: { $push: "$reason" },
-          reporters: {
+          reports: {
             $push: {
-              reporterId: "$reporterId",
-              reporterEmail: "$reporterEmail",
-              createdAt: "$createdAt",
+              reporterInfo: {
+                reporterId: "$reporterId",
+                reporterEmail: "$reporterEmail",
+              },
+              reason: "$reason",
+              reportedAt: "$createdAt",
             },
           },
         },
@@ -340,8 +383,7 @@ export async function getReportedLessonsAggregation({ skip = 0, limit = 20 } = {
           lessonId: "$_id",
           _id: 0,
           reportCount: 1,
-          reasons: 1,
-          reporters: 1,
+          reports: 1,
           lesson: 1,
         },
       },

@@ -3,8 +3,55 @@ import { getDB } from "../config/db.js";
 import { parsePagination, buildPaginationMeta } from "../utils/pagination.js";
 import { getMostSavedLessons, getTopContributors } from "../utils/aggregation.js";
 import { ACCESS_LEVELS, VISIBILITY } from "../constants/index.js";
+import { isAdminOrCeo } from "../utils/roles.js";
 
+async function enrichLessonsWithCreator(db, lessons) {
+  if (!Array.isArray(lessons) || lessons.length === 0) {
+    return lessons;
+  }
 
+  const creatorIds = [...new Set(lessons
+    .map((lesson) => lesson.creatorId)
+    .filter(Boolean)
+    .map((id) => id.toString()))];
+
+  if (creatorIds.length === 0) {
+    return lessons;
+  }
+
+  const users = await db
+    .collection("user")
+    .find(
+      { _id: { $in: creatorIds.map((id) => new ObjectId(id)) } },
+      { projection: { _id: 1, name: 1, email: 1, image: 1 } }
+    )
+    .toArray();
+
+  const userMap = new Map(users.map((user) => [user._id.toString(), user]));
+
+  return lessons.map((lesson) => {
+    const lessonClone = { ...lesson };
+    const creator = userMap.get(lesson.creatorId?.toString());
+
+    if (creator) {
+      lessonClone.creatorName = creator.name || lesson.creatorName || null;
+      lessonClone.creatorEmail = creator.email || lesson.creatorEmail || null;
+      lessonClone.creatorPhoto = creator.image || lesson.creatorPhoto || null;
+    } else {
+      lessonClone.creatorName = lesson.creatorName || null;
+      lessonClone.creatorEmail = lesson.creatorEmail || null;
+      lessonClone.creatorPhoto = lesson.creatorPhoto || null;
+    }
+
+    return lessonClone;
+  });
+}
+
+async function enrichLessonWithCreator(db, lesson) {
+  if (!lesson) return lesson;
+  const [enriched] = await enrichLessonsWithCreator(db, [lesson]);
+  return enriched;
+}
 
 /**
  * Build a MongoDB filter from query params for the public lessons endpoint.
@@ -43,17 +90,21 @@ export async function listPublicLessons(query) {
     db.collection("lessons").countDocuments(filter),
   ]);
 
-  return { lessons, pagination: buildPaginationMeta({ page, limit, total }) };
+  const enrichedLessons = await enrichLessonsWithCreator(db, lessons);
+
+  return { lessons: enrichedLessons, pagination: buildPaginationMeta({ page, limit, total }) };
 }
 
 export async function getFeaturedLessons() {
   const db = getDB();
-  return db
+  const lessons = await db
     .collection("lessons")
     .find({ featured: true, visibility: VISIBILITY.PUBLIC })
     .sort({ createdAt: -1 })
     .limit(10)
     .toArray();
+
+  return enrichLessonsWithCreator(db, lessons);
 }
 
 export async function getTopContributorsService() {
@@ -68,7 +119,8 @@ export async function getMostSavedLessonsService(query) {
     .collection("lessons")
     .countDocuments({ visibility: VISIBILITY.PUBLIC });
   const { page } = parsePagination(query);
-  return { lessons, pagination: buildPaginationMeta({ page, limit, total }) };
+  const enrichedLessons = await enrichLessonsWithCreator(db, lessons);
+  return { lessons: enrichedLessons, pagination: buildPaginationMeta({ page, limit, total }) };
 }
 
 export async function getLessonById(lessonId, user) {
@@ -98,7 +150,7 @@ export async function getLessonById(lessonId, user) {
       throw err;
     }
     const isOwner = lesson.creatorId.toString() === user.id;
-    if (!isOwner && user.role !== "admin") {
+    if (!isOwner && !isAdminOrCeo(user.role)) {
       const err = new Error("This lesson is private.");
       err.statusCode = 403;
       throw err;
@@ -111,10 +163,11 @@ export async function getLessonById(lessonId, user) {
       const sanitized = sanitizePremiumLesson(lesson);
       sanitized.isFavorited = false;
       sanitized.isLiked = false;
-      return { locked: true, lesson: sanitized };
+      const enrichedLesson = await enrichLessonWithCreator(db, sanitized);
+      return { locked: true, lesson: enrichedLesson };
     }
     const isOwner = lesson.creatorId.toString() === user.id;
-    const canAccess = isOwner || user.isPremium || user.role === "admin";
+    const canAccess = isOwner || user.isPremium || isAdminOrCeo(user.role);
     if (!canAccess) {
       const [fav, like] = await Promise.all([
         db.collection("favorites").findOne({ userId: new ObjectId(user.id), lessonId: lesson._id }),
@@ -123,7 +176,8 @@ export async function getLessonById(lessonId, user) {
       const sanitized = sanitizePremiumLesson(lesson);
       sanitized.isFavorited = !!fav;
       sanitized.isLiked = !!like;
-      return { locked: true, lesson: sanitized };
+      const enrichedLesson = await enrichLessonWithCreator(db, sanitized);
+      return { locked: true, lesson: enrichedLesson };
     }
   }
 
@@ -144,7 +198,8 @@ export async function getLessonById(lessonId, user) {
     lesson.isLiked = false;
   }
 
-  return { locked: false, lesson };
+  const enrichedLesson = await enrichLessonWithCreator(db, lesson);
+  return { locked: false, lesson: enrichedLesson };
 }
 
 function sanitizePremiumLesson(lesson) {
@@ -156,7 +211,7 @@ export async function createLesson(data, user) {
   const db = getDB();
 
   // Free users cannot create premium lessons
-  if (!user.isPremium && user.role !== "admin") {
+  if (!user.isPremium && !isAdminOrCeo(user.role)) {
     data.accessLevel = ACCESS_LEVELS.FREE;
   }
 
@@ -173,6 +228,7 @@ export async function createLesson(data, user) {
     viewsCount: 0,
     featured: false,
     reviewed: false,
+    isFlagged: false,
     createdAt: now,
     updatedAt: now,
   };
@@ -280,7 +336,8 @@ export async function getUserPublicLessons(userId, query) {
     db.collection("lessons").countDocuments(filter),
   ]);
 
-  return { lessons, pagination: buildPaginationMeta({ page, limit, total }) };
+  const enrichedLessons = await enrichLessonsWithCreator(db, lessons);
+  return { lessons: enrichedLessons, pagination: buildPaginationMeta({ page, limit, total }) };
 }
 
 export async function getMyLessons(userId, query) {
@@ -303,5 +360,6 @@ export async function getMyLessons(userId, query) {
     db.collection("lessons").countDocuments(filter),
   ]);
 
-  return { lessons, pagination: buildPaginationMeta({ page, limit, total }) };
+  const enrichedLessons = await enrichLessonsWithCreator(db, lessons);
+  return { lessons: enrichedLessons, pagination: buildPaginationMeta({ page, limit, total }) };
 }

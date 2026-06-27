@@ -1,9 +1,10 @@
 import { getDB } from "../config/db.js";
 import { ObjectId } from "mongodb";
+import { isAdminOrCeo } from "../utils/roles.js";
 
 /**
  * Verifies the authenticated user is the owner of the lesson,
- * or an admin. Attaches req.lesson to the request.
+ * or an admin/ceo. Attaches req.lesson to the request.
  * Requires verifySession to run first.
  */
 export async function verifyLessonOwner(req, res, next) {
@@ -24,7 +25,7 @@ export async function verifyLessonOwner(req, res, next) {
     }
 
     const isOwner = lesson.creatorId.toString() === req.user.id;
-    const isAdmin = req.user.role === "admin";
+    const isAdmin = isAdminOrCeo(req.user.role);
 
     if (!isOwner && !isAdmin) {
       return res.status(403).json({

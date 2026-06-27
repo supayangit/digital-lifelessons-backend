@@ -42,5 +42,11 @@ export async function createReport(data, user) {
   };
 
   const result = await db.collection("lessonReports").insertOne(doc);
+
+  await db.collection("lessons").updateOne(
+    { _id: lessonOid },
+    { $set: { isFlagged: true } }
+  );
+
   return { ...doc, _id: result.insertedId };
 }

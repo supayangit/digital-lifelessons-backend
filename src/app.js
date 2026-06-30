@@ -60,6 +60,9 @@ const authLimiter = rateLimit({
   message: { success: false, message: "Too many authentication attempts. Please slow down." },
 });
 
+// ── Cookie Parsing (required before Better Auth handlers) ──────────────────────
+app.use(cookieParser());
+
 app.use("/api/auth", (req, res) => {
   console.log("AUTH HANDLER HIT");
   return toNodeHandler(getAuth())(req, res);
@@ -77,7 +80,6 @@ app.use("/api/payments", paymentRoutes);
 
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true, limit: "2mb" }));
-app.use(cookieParser());
 
 // ── Input Sanitization ─────────────────────────────────────────────────────────
 app.use(mongoSanitize());
